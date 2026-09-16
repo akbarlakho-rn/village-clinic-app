@@ -33,14 +33,8 @@ export interface Patient {
   updated_at: string;
 }
 
-export interface NewPatientInput {
-  household_id: number;
-  name: string;
-  relation_to_head?: string;
-  village?: string;
-  phone?: string;
-}
-
-export interface HouseholdWithPatients extends Household {
-  patients: Patient[];
+export interface PatientWithHousehold extends Patient {
+  household_head: string;
+  household_balance: number;
+  household_code: string;
 }

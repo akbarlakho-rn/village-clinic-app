@@ -1,78 +1,113 @@
 // src/database/queries/households.ts
 import { getDatabase } from '../index';
 import { 
-  Household, 
+Household,
   NewHouseholdInput, 
-  Patient, 
-  NewPatientInput, 
-  HouseholdWithPatients 
+  PatientWithHousehold 
 } from '../../types/household';
 
-// آٹو کوڈ جنریٹر: H-0001 یا P-0001 فارمیٹ
+export type { PatientWithHousehold, Household, NewHouseholdInput };
+// Auto code generator: H-0001, P-0001
 async function generateNextCode(tableName: 'households' | 'patients', prefix: 'H' | 'P'): Promise<string> {
   const db = await getDatabase();
-  const column = prefix === 'H' ? 'household_code' : 'patient_code';
-  
   const row = await db.getFirstAsync<{ max_id: number }>(
     `SELECT MAX(id) as max_id FROM ${tableName};`
   );
-
   const nextNumber = (row?.max_id || 0) + 1;
   return `${prefix}-${String(nextNumber).padStart(4, '0')}`;
 }
 
-// 1. نیا ہاؤس ہولڈ بنانا (اوپننگ ادھار کے ساتھ)
-export async function addHousehold(data: NewHouseholdInput): Promise<{ id: number; household_code: string }> {
+// Create Household and its first patient together
+export async function createHouseholdWithPatient(
+  householdData: NewHouseholdInput,
+  patientName?: string,
+  relationToHead?: string
+): Promise<{ householdId: number; patientId: number }> {
   const db = await getDatabase();
-  const code = await generateNextCode('households', 'H');
-  const openingBalance = data.opening_balance && data.opening_balance > 0 ? data.opening_balance : 0;
+  let householdId = 0;
+  let patientId = 0;
 
-  const result = await db.runAsync(
-    `INSERT INTO households (household_code, head_name, village, phone, opening_balance, balance, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?);`,
-    [
-      code,
-      data.head_name.trim(),
-      data.village?.trim() || null,
-      data.phone?.trim() || null,
-      openingBalance,
-      openingBalance, // موجودہ بیلنس بھی اسی اوپننگ ادھار سے شروع ہوگا
-      data.notes?.trim() || null,
-    ]
-  );
+  await db.withTransactionAsync(async () => {
+    const hCode = await generateNextCode('households', 'H');
+    const openingBal = householdData.opening_balance && householdData.opening_balance > 0 
+      ? householdData.opening_balance 
+      : 0;
 
-  return { id: result.lastInsertRowId, household_code: code };
+    // 1. Insert Household
+    const hResult = await db.runAsync(
+      `INSERT INTO households (household_code, head_name, village, phone, opening_balance, balance, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?);`,
+      [
+        hCode,
+        householdData.head_name.trim(),
+        householdData.village?.trim() || null,
+        householdData.phone?.trim() || null,
+        openingBal,
+        openingBal, // Current balance starts with opening balance
+        householdData.notes?.trim() || null,
+      ]
+    );
+    householdId = hResult.lastInsertRowId;
+
+    // 2. Insert First Patient (Head or family member)
+    const pCode = await generateNextCode('patients', 'P');
+    const actualPatientName = patientName?.trim() || householdData.head_name.trim();
+    const actualRelation = relationToHead?.trim() || (patientName ? 'Family Member' : 'Self (Head)');
+
+    const pResult = await db.runAsync(
+      `INSERT INTO patients (patient_code, household_id, name, relation_to_head, village, phone)
+       VALUES (?, ?, ?, ?, ?, ?);`,
+      [
+        pCode,
+        householdId,
+        actualPatientName,
+        actualRelation,
+        householdData.village?.trim() || null,
+        householdData.phone?.trim() || null,
+      ]
+    );
+    patientId = pResult.lastInsertRowId;
+  });
+
+  return { householdId, patientId };
 }
 
-// 2. نیا مریض رجسٹر کرنا
-export async function addPatient(data: NewPatientInput): Promise<{ id: number; patient_code: string }> {
+// Search Patients with household balance details
+export async function searchPatients(searchTerm: string = ''): Promise<PatientWithHousehold[]> {
   const db = await getDatabase();
-  const code = await generateNextCode('patients', 'P');
+  const trimmed = searchTerm.trim();
 
-  const result = await db.runAsync(
-    `INSERT INTO patients (patient_code, household_id, name, relation_to_head, village, phone)
-     VALUES (?, ?, ?, ?, ?, ?);`,
-    [
-      code,
-      data.household_id,
-      data.name.trim(),
-      data.relation_to_head?.trim() || null,
-      data.village?.trim() || null,
-      data.phone?.trim() || null,
-    ]
-  );
-
-  return { id: result.lastInsertRowId, patient_code: code };
-}
-
-// 3. ہاؤس ہولڈز کی لسٹ اور تلاش (Search by Name, Code, Phone)
-export async function getHouseholds(searchTerm: string = ''): Promise<Household[]> {
-  const db = await getDatabase();
-  if (!searchTerm.trim()) {
-    return await db.getAllAsync<Household>(`SELECT * FROM households ORDER BY head_name ASC;`);
+  if (!trimmed) {
+    return await db.getAllAsync<PatientWithHousehold>(
+      `SELECT p.*, h.head_name as household_head, h.balance as household_balance, h.household_code
+       FROM patients p
+       JOIN households h ON p.household_id = h.id
+       ORDER BY p.id DESC;`
+    );
   }
 
-  const query = `%${searchTerm.trim()}%`;
+  const query = `%${trimmed}%`;
+  return await db.getAllAsync<PatientWithHousehold>(
+    `SELECT p.*, h.head_name as household_head, h.balance as household_balance, h.household_code
+     FROM patients p
+     JOIN households h ON p.household_id = h.id
+     WHERE p.name LIKE ? OR p.patient_code LIKE ? OR p.phone LIKE ? OR h.head_name LIKE ?
+     ORDER BY p.id DESC;`,
+    [query, query, query, query]
+  );
+}
+// Fetch all households (with optional search)
+export async function getHouseholds(searchTerm: string = ''): Promise<Household[]> {
+  const db = await getDatabase();
+  const trimmed = searchTerm.trim();
+
+  if (!trimmed) {
+    return await db.getAllAsync<Household>(
+      `SELECT * FROM households ORDER BY head_name ASC;`
+    );
+  }
+
+  const query = `%${trimmed}%`;
   return await db.getAllAsync<Household>(
     `SELECT * FROM households 
      WHERE head_name LIKE ? OR household_code LIKE ? OR phone LIKE ? 
@@ -80,40 +115,36 @@ export async function getHouseholds(searchTerm: string = ''): Promise<Household[
     [query, query, query]
   );
 }
-
-// 4. مریضوں کی تلاش (Search by Name, Code, Phone)
-export async function searchPatients(searchTerm: string = ''): Promise<(Patient & { household_head: string; household_balance: number })[]> {
-  const db = await getDatabase();
-  const query = `%${searchTerm.trim()}%`;
-
-  return await db.getAllAsync<Patient & { household_head: string; household_balance: number }>(
-    `SELECT p.*, h.head_name as household_head, h.balance as household_balance
-     FROM patients p
-     JOIN households h ON p.household_id = h.id
-     WHERE p.name LIKE ? OR p.patient_code LIKE ? OR p.phone LIKE ?
-     ORDER BY p.name ASC;`,
-    [query, query, query]
-  );
+// Patient History Item Type
+export interface PatientHistoryRecord {
+  transaction_id: number;
+  date: string;
+  payment_type: string;
+  total_amount: number;
+  medicine_name: string;
+  quantity: number;
+  unit_price: number;
+  total_price: number;
 }
 
-// 5. ہاؤس ہولڈ کی مکمل معلومات بمع تمام فیملی ممبرز
-export async function getHouseholdDetails(householdId: number): Promise<HouseholdWithPatients | null> {
+// Fetch complete prescription history for a single patient
+export async function getPatientHistory(patientId: number): Promise<PatientHistoryRecord[]> {
   const db = await getDatabase();
-  
-  const household = await db.getFirstAsync<Household>(
-    `SELECT * FROM households WHERE id = ?;`,
-    [householdId]
+  return await db.getAllAsync<PatientHistoryRecord>(
+    `SELECT 
+      t.id as transaction_id,
+      t.created_at as date,
+      t.payment_type,
+      t.total_amount,
+      m.name as medicine_name,
+      ti.quantity,
+      ti.unit_price,
+      ti.total_price
+    FROM transactions t
+    JOIN transaction_items ti ON t.id = ti.transaction_id
+    JOIN medicines m ON ti.medicine_id = m.id
+    WHERE t.patient_id = ?
+    ORDER BY t.created_at DESC;`,
+    [patientId]
   );
-
-  if (!household) return null;
-
-  const patients = await db.getAllAsync<Patient>(
-    `SELECT * FROM patients WHERE household_id = ? ORDER BY id ASC;`,
-    [householdId]
-  );
-
-  return {
-    ...household,
-    patients,
-  };
 }

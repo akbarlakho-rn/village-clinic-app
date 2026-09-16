@@ -1,115 +1,138 @@
 // src/screens/households/PatientsScreen.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
-  View,
-  Text,
-  TextInput,
-  FlatList,
-  TouchableOpacity,
-  Modal,
   StyleSheet,
-  ActivityIndicator,
-  Alert,
+  Text,
+  View,
+  TextInput,
+  TouchableOpacity,
+  FlatList,
+  Modal,
+  ScrollView,
   KeyboardAvoidingView,
   Platform,
-  ScrollView,
+  Alert,
 } from 'react-native';
-import { useHouseholdStore } from '../../store/useHouseholdStore';
+import { PatientWithHousehold } from '../../types/household';
+import { searchPatients, createHouseholdWithPatient, getPatientHistory, PatientHistoryRecord } from '../../database/queries/households';
 
 export default function PatientsScreen() {
-  const { patients, isLoading, searchTerm, setSearchTerm, fetchPatients, createHouseholdWithFirstPatient } =
-    useHouseholdStore();
-
+  const [patients, setPatients] = useState<PatientWithHousehold[]>([]);
+  const [searchTerm, setSearchTerm] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
+  const [historyModal, setHistoryModal] = useState(false);
+const [selectedPatientForHistory, setSelectedPatientForHistory] = useState<PatientWithHousehold | null>(null);
+const [patientHistory, setPatientHistory] = useState<PatientHistoryRecord[]>([]);
 
-  // نیا فارم اسٹیٹ
+const handleOpenHistory = async (patient: PatientWithHousehold) => {
+  setSelectedPatientForHistory(patient);
+  const records = await getPatientHistory(patient.id);
+  setPatientHistory(records);
+  setHistoryModal(true);
+};
+
+  // Form states
   const [headName, setHeadName] = useState('');
   const [village, setVillage] = useState('');
   const [phone, setPhone] = useState('');
   const [openingBalance, setOpeningBalance] = useState('');
   const [patientName, setPatientName] = useState('');
+  const [relation, setRelation] = useState('');
   const [notes, setNotes] = useState('');
 
+  const loadPatients = useCallback(async () => {
+    try {
+      const data = await searchPatients(searchTerm);
+      setPatients(data);
+    } catch (error) {
+      console.error('Failed to load patients:', error);
+    }
+  }, [searchTerm]);
+
   useEffect(() => {
-    fetchPatients();
-  }, []);
+    loadPatients();
+  }, [loadPatients]);
+
+  const resetForm = () => {
+    setHeadName('');
+    setVillage('');
+    setPhone('');
+    setOpeningBalance('');
+    setPatientName('');
+    setRelation('');
+    setNotes('');
+  };
 
   const handleSave = async () => {
     if (!headName.trim()) {
-      Alert.alert('ضروری معلومات', 'خاندان کے سربراہ کا نام درج کرنا لازمی ہے۔');
+      Alert.alert('Validation Error', 'Household head name is required.');
       return;
     }
 
+    const opBal = parseFloat(openingBalance) || 0;
+
     try {
-      await createHouseholdWithFirstPatient(
+      await createHouseholdWithPatient(
         {
           head_name: headName.trim(),
           village: village.trim() || undefined,
           phone: phone.trim() || undefined,
-          opening_balance: openingBalance ? parseFloat(openingBalance) : 0,
+          opening_balance: opBal,
           notes: notes.trim() || undefined,
         },
-        patientName.trim() || undefined
+        patientName.trim() || undefined,
+        relation.trim() || undefined
       );
 
-      Alert.alert('کامیابی', 'نیا کھاتہ اور مریض کامیابی سے درج ہو گیا۔');
-      // فارم ری سیٹ کریں
-      setHeadName('');
-      setVillage('');
-      setPhone('');
-      setOpeningBalance('');
-      setPatientName('');
-      setNotes('');
+      resetForm();
       setModalVisible(false);
+      loadPatients();
+      Alert.alert('Success', 'Household & Patient registered successfully.');
     } catch (error) {
-      console.error(error);
-      Alert.alert('خرابی', 'ریکارڈ محفوظ کرنے میں خرابی پیش آئی۔');
+      console.error('Failed to create household/patient:', error);
+      Alert.alert('Error', 'Failed to save record.');
     }
   };
 
   return (
     <View style={styles.container}>
-      {/* ہیڈر اور سرچ */}
-      <View style={styles.headerArea}>
-        <Text style={styles.pageTitle}>مریض اور کھاتے (Patients & Accounts)</Text>
+      {/* Header & Search */}
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Patients & Accounts</Text>
         <TextInput
           style={styles.searchInput}
-          placeholder="مریض کا نام، کوڈ یا فون نمبر تلاش کریں..."
+          placeholder="Search patient, code, phone, or head name..."
           placeholderTextColor="#94a3b8"
           value={searchTerm}
           onChangeText={setSearchTerm}
         />
       </View>
 
-      {/* مریضوں کی لسٹ */}
-      {isLoading && patients.length === 0 ? (
-        <ActivityIndicator size="large" color="#0284c7" style={{ marginTop: 40 }} />
-      ) : (
-        <FlatList
-          data={patients}
-          keyExtractor={(item) => item.id.toString()}
-          contentContainerStyle={styles.listContent}
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>کوئی مریض یا کھاتہ موجود نہیں ہے۔</Text>
-              <Text style={styles.emptySubText}>نیا کھاتہ درج کرنے کے لیے نیچے والا بٹن دبائیں۔</Text>
-            </View>
-          }
-          renderItem={({ item }) => (
+      {/* Patients List */}
+      <FlatList
+        data={patients}
+        keyExtractor={(item) => item.id.toString()}
+        contentContainerStyle={styles.listContainer}
+        ListEmptyComponent={
+          <View style={styles.emptyBox}>
+            <Text style={styles.emptyText}>No patients registered yet.</Text>
+            <Text style={styles.emptySubText}>Tap "+ New Household / Patient" to add.</Text>
+          </View>
+        }
+        renderItem={({ item }) => {
+          const hasLoan = item.household_balance > 0;
+          return (
             <View style={styles.card}>
+              <TouchableOpacity style={styles.card} onPress={() => handleOpenHistory(item)}>
               <View style={styles.cardRow}>
-                <View>
+                <View style={{ flex: 1 }}>
                   <Text style={styles.patientName}>{item.name}</Text>
-                  <Text style={styles.badgeText}>کوڈ: {item.patient_code}</Text>
+                  <Text style={styles.codeBadge}>Patient ID: {item.patient_code}</Text>
                 </View>
-                <View style={styles.balanceContainer}>
-                  <Text style={styles.balanceLabel}>کل ادھار (باقی)</Text>
-                  <Text
-                    style={[
-                      styles.balanceAmount,
-                      item.household_balance > 0 ? styles.redText : styles.greenText,
-                    ]}
-                  >
+
+                <View style={styles.balanceBox}>
+                  <Text style={styles.balanceLabel}>Account Due</Text>
+                  <Text style={[styles.balanceValue, hasLoan ? styles.loanDue : styles.loanClear]}>
                     Rs. {item.household_balance.toLocaleString()}
                   </Text>
                 </View>
@@ -117,59 +140,68 @@ export default function PatientsScreen() {
 
               <View style={styles.divider} />
 
-              <View style={styles.cardFooter}>
-                <Text style={styles.infoText}>سربراہ: {item.household_head}</Text>
-                {item.village && <Text style={styles.infoText}>گاؤں: {item.village}</Text>}
-                {item.phone && <Text style={styles.infoText}>فون: {item.phone}</Text>}
+              <View style={styles.footerRow}>
+                <Text style={styles.detailText}>Head: {item.household_head} ({item.household_code})</Text>
+                {item.relation_to_head && (
+                  <Text style={styles.detailText}>Rel: {item.relation_to_head}</Text>
+                )}
               </View>
-            </View>
-          )}
-        />
-      )}
+              </TouchableOpacity>
 
-      {/* نیا کھاتہ / مریض ایڈ کرنے کا بٹن */}
-      <TouchableOpacity style={styles.fabButton} onPress={() => setModalVisible(true)}>
-        <Text style={styles.fabText}>+ نیا کھاتہ / مریض</Text>
+              {(item.village || item.phone) && (
+                <View style={styles.subFooterRow}>
+                  {item.village && <Text style={styles.subDetailText}>Village: {item.village}</Text>}
+                  {item.phone && <Text style={styles.subDetailText}>Phone: {item.phone}</Text>}
+                </View>
+              )}
+            </View>
+          );
+        }}
+      />
+
+      {/* FAB Button */}
+      <TouchableOpacity style={styles.fab} onPress={() => setModalVisible(true)}>
+        <Text style={styles.fabText}>+ New Household / Patient</Text>
       </TouchableOpacity>
 
-      {/* فارم ماڈل */}
+      {/* Registration Modal */}
       <Modal visible={modalVisible} animationType="slide" transparent={true}>
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.modalOverlay}
         >
-          <View style={styles.modalContent}>
+          <View style={styles.modalCard}>
             <ScrollView showsVerticalScrollIndicator={false}>
-              <Text style={styles.modalTitle}>نیا کھاتہ و مریض درج کریں</Text>
+              <Text style={styles.modalTitle}>New Household & Patient</Text>
 
-              <Text style={styles.label}>خاندان کا سربراہ (Head Name) *</Text>
+              <Text style={styles.inputLabel}>Household Head Name *</Text>
               <TextInput
                 style={styles.input}
-                placeholder="مثلاً: محمد علی"
+                placeholder="e.g. Ghulam Rasool"
                 value={headName}
                 onChangeText={setHeadName}
               />
 
-              <Text style={styles.label}>مریض کا نام (اگر سربراہ کے علاوہ کوئی اور ہے)</Text>
+              <Text style={styles.inputLabel}>Patient Name (Optional)</Text>
               <TextInput
                 style={styles.input}
-                placeholder="خالی چھوڑنے پر سربراہ خود مریض بن جائے گا"
+                placeholder="Leave blank if Head is the patient"
                 value={patientName}
                 onChangeText={setPatientName}
               />
 
-              <View style={styles.rowInputs}>
+              <View style={styles.row}>
                 <View style={{ flex: 1, marginRight: 8 }}>
-                  <Text style={styles.label}>گاؤں / علاقہ</Text>
+                  <Text style={styles.inputLabel}>Relation to Head</Text>
                   <TextInput
                     style={styles.input}
-                    placeholder="مثلاً: گوٹھ خان محمد"
-                    value={village}
-                    onChangeText={setVillage}
+                    placeholder="Son, Wife, etc."
+                    value={relation}
+                    onChangeText={setRelation}
                   />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.label}>فون نمبر</Text>
+                  <Text style={styles.inputLabel}>Phone Number</Text>
                   <TextInput
                     style={styles.input}
                     placeholder="03001234567"
@@ -180,107 +212,165 @@ export default function PatientsScreen() {
                 </View>
               </View>
 
-              {/* طریقہ 2 کا اطلاق: پرانا کاغذی ادھار درج کرنا */}
-              <Text style={styles.label}>کاغذی رجسٹر کا پرانا ادھار (Opening Balance)</Text>
+              <Text style={styles.inputLabel}>Village / Area</Text>
               <TextInput
-                style={[styles.input, styles.loanInput]}
-                placeholder="0"
+                style={styles.input}
+                placeholder="e.g. Village Ali Murad"
+                value={village}
+                onChangeText={setVillage}
+              />
+
+              {/* Opening Balance Field (Previous Paper Ledger) */}
+              <Text style={styles.inputLabel}>Previous Paper Due (Opening Balance)</Text>
+              <TextInput
+                style={[styles.input, styles.loanInputHighlight]}
+                placeholder="0.00"
                 keyboardType="numeric"
                 value={openingBalance}
                 onChangeText={setOpeningBalance}
               />
 
-              <Text style={styles.label}>نوٹس / یاد دہانی</Text>
+              <Text style={styles.inputLabel}>Notes</Text>
               <TextInput
                 style={styles.input}
-                placeholder="مثلاً: پرانے رجسٹر نمبر 2 کا بقیہ"
+                placeholder="e.g. Register # 2 page 45"
                 value={notes}
                 onChangeText={setNotes}
               />
 
-              <View style={styles.modalActions}>
+              <View style={styles.actionButtons}>
                 <TouchableOpacity
                   style={[styles.btn, styles.cancelBtn]}
-                  onPress={() => setModalVisible(false)}
+                  onPress={() => {
+                    resetForm();
+                    setModalVisible(false);
+                  }}
                 >
-                  <Text style={styles.btnTextCancel}>منسوخ</Text>
+                  <Text style={styles.cancelBtnText}>Cancel</Text>
                 </TouchableOpacity>
+
                 <TouchableOpacity style={[styles.btn, styles.saveBtn]} onPress={handleSave}>
-                  <Text style={styles.btnTextSave}>محفوظ کریں</Text>
+                  <Text style={styles.saveBtnText}>Save Record</Text>
                 </TouchableOpacity>
               </View>
             </ScrollView>
           </View>
         </KeyboardAvoidingView>
       </Modal>
+      {/* Patient Prescription History Modal */}
+<Modal visible={historyModal} animationType="slide">
+  <View style={{ flex: 1, padding: 16, paddingTop: 40, backgroundColor: '#ffffff' }}>
+    <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#0f172a' }}>
+      Prescription History: {selectedPatientForHistory?.name}
+    </Text>
+    <Text style={{ fontSize: 13, color: '#64748b', marginBottom: 16 }}>
+      Head: {selectedPatientForHistory?.household_head} | ID: {selectedPatientForHistory?.patient_code}
+    </Text>
+
+    <FlatList
+      data={patientHistory}
+      keyExtractor={(item, index) => `${item.transaction_id}-${index}`}
+      ListEmptyComponent={
+        <Text style={{ textAlign: 'center', marginTop: 40, color: '#94a3b8' }}>
+          No previous prescriptions or sales recorded.
+        </Text>
+      }
+      renderItem={({ item }) => (
+        <View style={{ paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#1e293b' }}>
+              {item.medicine_name} (x{item.quantity})
+            </Text>
+            <Text style={{ fontSize: 13, fontWeight: '600', color: '#0284c7' }}>
+              Rs. {item.total_price}
+            </Text>
+          </View>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
+            <Text style={{ fontSize: 11, color: '#64748b' }}>Date: {item.date}</Text>
+            <Text style={{ fontSize: 11, color: '#64748b', textTransform: 'capitalize' }}>
+              Payment: {item.payment_type}
+            </Text>
+          </View>
+        </View>
+      )}
+    />
+
+    <TouchableOpacity
+      style={{ marginTop: 12, padding: 12, backgroundColor: '#e2e8f0', borderRadius: 8, alignItems: 'center' }}
+      onPress={() => setHistoryModal(false)}
+    >
+      <Text style={{ fontWeight: 'bold', color: '#475569' }}>Close History</Text>
+    </TouchableOpacity>
+  </View>
+</Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f1f5f9' },
-  headerArea: { padding: 16, backgroundColor: '#ffffff', borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
-  pageTitle: { fontSize: 20, fontWeight: 'bold', color: '#0f172a', marginBottom: 10, textAlign: 'right' },
+  container: { flex: 1, backgroundColor: '#f8fafc' },
+  header: { padding: 16, backgroundColor: '#ffffff', borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#0f172a', marginBottom: 12 },
   searchInput: {
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
+    backgroundColor: '#f1f5f9',
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 14,
-    textAlign: 'right',
+    color: '#0f172a',
   },
-  listContent: { padding: 16, paddingBottom: 80 },
+  listContainer: { padding: 16, paddingBottom: 80 },
   card: {
     backgroundColor: '#ffffff',
     borderRadius: 10,
     padding: 14,
-    marginBottom: 12,
+    marginBottom: 10,
     elevation: 2,
     shadowColor: '#000',
     shadowOpacity: 0.05,
-    shadowRadius: 4,
+    shadowRadius: 3,
   },
   cardRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  patientName: { fontSize: 17, fontWeight: 'bold', color: '#1e293b' },
-  badgeText: { fontSize: 12, color: '#64748b', marginTop: 2 },
-  balanceContainer: { alignItems: 'flex-end' },
+  patientName: { fontSize: 16, fontWeight: 'bold', color: '#1e293b' },
+  codeBadge: { fontSize: 12, color: '#64748b', marginTop: 2 },
+  balanceBox: { alignItems: 'flex-end' },
   balanceLabel: { fontSize: 11, color: '#64748b' },
-  balanceAmount: { fontSize: 16, fontWeight: 'bold', marginTop: 2 },
-  redText: { color: '#dc2626' },
-  greenText: { color: '#16a34a' },
+  balanceValue: { fontSize: 16, fontWeight: 'bold', marginTop: 2 },
+  loanDue: { color: '#dc2626' },
+  loanClear: { color: '#16a34a' },
   divider: { height: 1, backgroundColor: '#f1f5f9', marginVertical: 10 },
-  cardFooter: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  infoText: { fontSize: 12, color: '#475569' },
-  emptyContainer: { alignItems: 'center', marginTop: 60 },
+  footerRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  subFooterRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
+  detailText: { fontSize: 12, color: '#475569', fontWeight: '500' },
+  subDetailText: { fontSize: 12, color: '#64748b' },
+  emptyBox: { alignItems: 'center', marginTop: 60 },
   emptyText: { fontSize: 16, fontWeight: '600', color: '#64748b' },
-  emptySubText: { fontSize: 13, color: '#94a3b8', marginTop: 6 },
-  fabButton: {
+  emptySubText: { fontSize: 13, color: '#94a3b8', marginTop: 4 },
+  fab: {
     position: 'absolute',
     bottom: 20,
     right: 20,
     backgroundColor: '#0284c7',
     paddingVertical: 14,
     paddingHorizontal: 20,
-    borderRadius: 30,
+    borderRadius: 28,
     elevation: 4,
   },
-  fabText: { color: '#ffffff', fontWeight: 'bold', fontSize: 15 },
+  fabText: { color: '#ffffff', fontWeight: 'bold', fontSize: 14 },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     padding: 16,
   },
-  modalContent: {
+  modalCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 14,
+    borderRadius: 12,
     padding: 20,
-    maxHeight: '85%',
+    maxHeight: '90%',
   },
-  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#0f172a', marginBottom: 16, textAlign: 'center' },
-  label: { fontSize: 13, fontWeight: '600', color: '#334155', marginBottom: 4, textAlign: 'right' },
+  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#0f172a', marginBottom: 16 },
+  inputLabel: { fontSize: 12, fontWeight: '600', color: '#475569', marginBottom: 4 },
   input: {
     borderWidth: 1,
     borderColor: '#cbd5e1',
@@ -288,14 +378,17 @@ const styles = StyleSheet.create({
     padding: 10,
     fontSize: 14,
     marginBottom: 12,
-    textAlign: 'right',
+    color: '#0f172a',
   },
-  loanInput: { borderColor: '#fca5a5', backgroundColor: '#fff5f5' },
-  rowInputs: { flexDirection: 'row' },
-  modalActions: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10, gap: 12 },
+  loanInputHighlight: {
+    borderColor: '#fca5a5',
+    backgroundColor: '#fff5f5',
+  },
+  row: { flexDirection: 'row' },
+  actionButtons: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10, gap: 10 },
   btn: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
   cancelBtn: { backgroundColor: '#e2e8f0' },
   saveBtn: { backgroundColor: '#0284c7' },
-  btnTextCancel: { color: '#475569', fontWeight: 'bold' },
-  btnTextSave: { color: '#ffffff', fontWeight: 'bold' },
+  cancelBtnText: { color: '#475569', fontWeight: 'bold' },
+  saveBtnText: { color: '#ffffff', fontWeight: 'bold' },
 });
