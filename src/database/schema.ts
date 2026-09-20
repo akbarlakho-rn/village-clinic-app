@@ -104,4 +104,12 @@ export const CREATE_TABLES_QUERY = `
     notes TEXT,
     created_at TEXT DEFAULT (datetime('now', 'localtime'))
   );
+  CREATE TABLE IF NOT EXISTS medicine_purchases (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  medicine_id INTEGER NOT NULL,
+  quantity INTEGER NOT NULL,
+  purchase_price REAL NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  FOREIGN KEY (medicine_id) REFERENCES medicines(id)
+);
 `;

@@ -15,13 +15,14 @@ import {
 } from 'react-native';
 import { Medicine } from '../../types/medicine';
 import { getMedicines, addMedicine, restockMedicine } from '../../database/queries/medicines';
+import { useFocusEffect } from '@react-navigation/native';
 
 export default function MedicinesScreen() {
   const [medicines, setMedicines] = useState<Medicine[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
 
-  // Form states
+  // New Medicine Form states
   const [name, setName] = useState('');
   const [genericName, setGenericName] = useState('');
   const [unit, setUnit] = useState('tablet');
@@ -30,6 +31,14 @@ export default function MedicinesScreen() {
   const [stock, setStock] = useState('');
   const [lowStockLimit, setLowStockLimit] = useState('10');
   const [expiryDate, setExpiryDate] = useState(''); // Format: YYYY-MM-DD
+
+  // Smart Restock Modal States
+  const [restockModal, setRestockModal] = useState(false);
+  const [selectedMedForRestock, setSelectedMedForRestock] = useState<Medicine | null>(null);
+  const [restockQty, setRestockQty] = useState('');
+  const [restockBuyPrice, setRestockBuyPrice] = useState('');
+  const [restockSalePrice, setRestockSalePrice] = useState('');
+  const [restockExpiryDate, setRestockExpiryDate] = useState('');
 
   const loadMedicines = useCallback(async () => {
     try {
@@ -40,9 +49,11 @@ export default function MedicinesScreen() {
     }
   }, [searchTerm]);
 
-  useEffect(() => {
-    loadMedicines();
-  }, [loadMedicines]);
+useFocusEffect(
+  useCallback(() => {
+    loadMedicines(); // جب بھی یوزر اس ٹیب/اسکرین پر آئے گا، تازہ ڈیٹا خود بخود لوڈ ہوگا
+  }, [loadMedicines])
+);
 
   const resetForm = () => {
     setName('');
@@ -87,38 +98,50 @@ export default function MedicinesScreen() {
       Alert.alert('Error', 'Failed to save medicine.');
     }
   };
-const [restockModal, setRestockModal] = useState(false);
-const [selectedMedForRestock, setSelectedMedForRestock] = useState<Medicine | null>(null);
-const [restockQty, setRestockQty] = useState('');
-const [restockBuyPrice, setRestockBuyPrice] = useState('');
 
-const openRestockModal = (med: Medicine) => {
-  setSelectedMedForRestock(med);
-  setRestockQty('');
-  setRestockBuyPrice(med.purchase_price ? med.purchase_price.toString() : '');
-  setRestockModal(true);
-};
+  // Open Restock Modal with existing values pre-filled
+  const openRestockModal = (med: Medicine) => {
+    setSelectedMedForRestock(med);
+    setRestockQty('');
+    setRestockBuyPrice(med.purchase_price ? med.purchase_price.toString() : '');
+    setRestockSalePrice(med.selling_price ? med.selling_price.toString() : '');
+    setRestockExpiryDate(med.expiry_date || '');
+    setRestockModal(true);
+  };
 
-const handleSaveRestock = async () => {
-  if (!selectedMedForRestock) return;
-  const qty = parseInt(restockQty, 10);
-  if (!qty || qty <= 0) {
-    Alert.alert('Invalid Quantity', 'Please enter valid quantity to add.');
-    return;
-  }
+  // Save Restock with Qty, New Buy Price, New Sale Price & New Expiry
+  const handleSaveRestock = async () => {
+    if (!selectedMedForRestock) return;
+    const qty = parseInt(restockQty, 10);
+    if (!qty || qty <= 0) {
+      Alert.alert('Invalid Quantity', 'Please enter a valid quantity to add.');
+      return;
+    }
 
-  const pPrice = parseFloat(restockBuyPrice) || selectedMedForRestock.purchase_price;
+    const pPrice = parseFloat(restockBuyPrice) || selectedMedForRestock.purchase_price;
+    const sPrice = parseFloat(restockSalePrice) || selectedMedForRestock.selling_price;
 
-  try {
-    await restockMedicine(selectedMedForRestock.id, qty, pPrice);
-    setRestockModal(false);
-    loadMedicines();
-    Alert.alert('Success', `Added ${qty} items to ${selectedMedForRestock.name}`);
-  } catch (err) {
-    console.error(err);
-    Alert.alert('Error', 'Failed to update stock.');
-  }
-};
+    try {
+      await restockMedicine(
+        selectedMedForRestock.id,
+        qty,
+        pPrice,
+        sPrice,
+        restockExpiryDate.trim() || undefined
+      );
+
+      setRestockModal(false);
+      loadMedicines();
+      Alert.alert(
+        'Stock Updated',
+        `Added ${qty} items to ${selectedMedForRestock.name}.\nNew Sale Price: Rs. ${sPrice}`
+      );
+    } catch (err) {
+      console.error(err);
+      Alert.alert('Error', 'Failed to update stock.');
+    }
+  };
+
   return (
     <View style={styles.container}>
       {/* Top Header & Search */}
@@ -163,11 +186,11 @@ const handleSaveRestock = async () => {
                   </Text>
                   <Text style={styles.stockLabel}>Available</Text>
                   <TouchableOpacity
-    style={{ marginTop: 6, backgroundColor: '#e0f2fe', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 }}
-    onPress={() => openRestockModal(item)}
-  >
-    <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#0369a1' }}>+ Restock</Text>
-  </TouchableOpacity>
+                    style={styles.restockBtn}
+                    onPress={() => openRestockModal(item)}
+                  >
+                    <Text style={styles.restockBtnText}>+ Restock</Text>
+                  </TouchableOpacity>
                 </View>
               </View>
 
@@ -191,14 +214,14 @@ const handleSaveRestock = async () => {
         <Text style={styles.fabText}>+ Add Medicine</Text>
       </TouchableOpacity>
 
-      {/* Add Modal */}
+      {/* Add New Medicine Modal */}
       <Modal visible={modalVisible} animationType="slide" transparent={true}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={styles.modalOverlay}
         >
           <View style={styles.modalCard}>
-            <ScrollView showsVerticalScrollIndicator={false}>
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
               <Text style={styles.modalTitle}>Add New Medicine</Text>
 
               <Text style={styles.inputLabel}>Medicine Name *</Text>
@@ -303,44 +326,82 @@ const handleSaveRestock = async () => {
           </View>
         </KeyboardAvoidingView>
       </Modal>
-      {/* Restock Modal */}
-<Modal visible={restockModal} animationType="slide" transparent={true}>
-  <View style={styles.modalOverlay}>
-    <View style={styles.modalCard}>
-      <Text style={styles.modalTitle}>Restock: {selectedMedForRestock?.name}</Text>
-      <Text style={{ fontSize: 12, color: '#64748b', marginBottom: 12 }}>
-        Current Stock: {selectedMedForRestock?.stock} {selectedMedForRestock?.unit}
-      </Text>
 
-      <Text style={styles.inputLabel}>Quantity to Add *</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="e.g. 50"
-        keyboardType="numeric"
-        value={restockQty}
-        onChangeText={setRestockQty}
-      />
+      {/* Smart Restock Modal (Qty, Purchase Price, Sale Price, Expiry) */}
+      <Modal visible={restockModal} animationType="slide" transparent={true}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.modalOverlay}
+        >
+          <View style={styles.modalCard}>
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <Text style={styles.modalTitle}>Restock: {selectedMedForRestock?.name}</Text>
+              
+              <View style={styles.currentStockBox}>
+                <Text style={styles.currentStockText}>
+                  Current Available Stock: <Text style={{ fontWeight: 'bold' }}>{selectedMedForRestock?.stock} {selectedMedForRestock?.unit}</Text>
+                </Text>
+              </View>
 
-      <Text style={styles.inputLabel}>New Purchase Price (Per item)</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="e.g. 12.5"
-        keyboardType="numeric"
-        value={restockBuyPrice}
-        onChangeText={setRestockBuyPrice}
-      />
+              <Text style={styles.inputLabel}>Quantity to Add (نئی تعداد) *</Text>
+              <TextInput
+                style={[styles.input, { fontWeight: 'bold', fontSize: 16 }]}
+                placeholder="e.g. 50"
+                keyboardType="numeric"
+                autoFocus
+                value={restockQty}
+                onChangeText={setRestockQty}
+              />
 
-      <View style={styles.actionButtons}>
-        <TouchableOpacity style={[styles.btn, styles.cancelBtn]} onPress={() => setRestockModal(false)}>
-          <Text style={styles.cancelBtnText}>Cancel</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.btn, styles.saveBtn]} onPress={handleSaveRestock}>
-          <Text style={styles.saveBtnText}>Update Stock</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  </View>
-</Modal>
+              <View style={styles.row}>
+                <View style={{ flex: 1, marginRight: 8 }}>
+                  <Text style={styles.inputLabel}>New Purchase Price</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="e.g. 12.5"
+                    keyboardType="numeric"
+                    value={restockBuyPrice}
+                    onChangeText={setRestockBuyPrice}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inputLabel}>New Selling Price</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="e.g. 15.0"
+                    keyboardType="numeric"
+                    value={restockSalePrice}
+                    onChangeText={setRestockSalePrice}
+                  />
+                </View>
+              </View>
+
+              <Text style={styles.inputLabel}>New Expiry Date (YYYY-MM-DD)</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="2028-06-30"
+                value={restockExpiryDate}
+                onChangeText={setRestockExpiryDate}
+              />
+
+              <View style={styles.actionButtons}>
+                <TouchableOpacity
+                  style={[styles.btn, styles.cancelBtn]}
+                  onPress={() => setRestockModal(false)}
+                >
+                  <Text style={styles.cancelBtnText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.btn, styles.saveBtn]}
+                  onPress={handleSaveRestock}
+                >
+                  <Text style={styles.saveBtnText}>Update & Save</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -357,7 +418,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#0f172a',
   },
-  listContainer: { padding: 16, paddingBottom: 80 },
+  listContainer: { padding: 16, paddingBottom: 90 },
   card: {
     backgroundColor: '#ffffff',
     borderRadius: 10,
@@ -367,6 +428,8 @@ const styles = StyleSheet.create({
     shadowColor: '#000',
     shadowOpacity: 0.05,
     shadowRadius: 3,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
   cardRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   medicineName: { fontSize: 16, fontWeight: 'bold', color: '#1e293b' },
@@ -387,6 +450,16 @@ const styles = StyleSheet.create({
   normalStock: { color: '#16a34a' },
   lowStock: { color: '#dc2626' },
   stockLabel: { fontSize: 11, color: '#64748b' },
+  restockBtn: {
+    marginTop: 6,
+    backgroundColor: '#e0f2fe',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: '#bae6fd',
+  },
+  restockBtnText: { fontSize: 11, fontWeight: 'bold', color: '#0369a1' },
   divider: { height: 1, backgroundColor: '#f1f5f9', marginVertical: 10 },
   footerRow: { flexDirection: 'row', justifyContent: 'space-between' },
   priceText: { fontSize: 12, color: '#475569' },
@@ -396,7 +469,7 @@ const styles = StyleSheet.create({
   emptySubText: { fontSize: 13, color: '#94a3b8', marginTop: 4 },
   fab: {
     position: 'absolute',
-    bottom: 20,
+    bottom: 24,
     right: 20,
     backgroundColor: '#0284c7',
     paddingVertical: 14,
@@ -417,7 +490,14 @@ const styles = StyleSheet.create({
     padding: 20,
     maxHeight: '90%',
   },
-  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#0f172a', marginBottom: 16 },
+  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#0f172a', marginBottom: 12 },
+  currentStockBox: {
+    backgroundColor: '#f1f5f9',
+    padding: 8,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  currentStockText: { fontSize: 12, color: '#475569' },
   inputLabel: { fontSize: 12, fontWeight: '600', color: '#475569', marginBottom: 4 },
   input: {
     borderWidth: 1,
@@ -427,12 +507,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginBottom: 12,
     color: '#0f172a',
+    backgroundColor: '#ffffff',
   },
   row: { flexDirection: 'row' },
   actionButtons: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10, gap: 10 },
   btn: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
   cancelBtn: { backgroundColor: '#e2e8f0' },
-  saveBtn: { backgroundColor: '#0284c7' },
+  saveBtn: { backgroundColor: '#16a34a' },
   cancelBtnText: { color: '#475569', fontWeight: 'bold' },
   saveBtnText: { color: '#ffffff', fontWeight: 'bold' },
 });

@@ -13,29 +13,47 @@ import {
   Platform,
 } from 'react-native';
 
-import { searchPatients, createHouseholdWithPatient, PatientWithHousehold } from '../../database/queries/households';
+import {
+  searchPatients,
+  createHouseholdWithPatient,
+  getHouseholds,
+  addPatientToExistingHousehold,
+  PatientWithHousehold,
+  Household,
+} from '../../database/queries/households';
+
 import { searchMedicines } from '../../database/queries/medicines';
 import { createSaleTransaction } from '../../database/queries/transactions';
 import { Medicine } from '../../types/medicine';
-import { useCartStore } from '../../store/useCartStore';
+import { useCartStore, CartItem } from '../../store/useCartStore';
 
 export default function NewEntryScreen() {
   const cart = useCartStore();
 
-  // Search States
+  // 1. Patient Live Search States
   const [patientSearchText, setPatientSearchText] = useState('');
   const [patientResults, setPatientResults] = useState<PatientWithHousehold[]>([]);
 
+  // 2. Medicine Live Search States
   const [medSearchText, setMedSearchText] = useState('');
   const [medResults, setMedResults] = useState<Medicine[]>([]);
 
-  // Quick Patient Modal States
+  // 3. Quick Add Modal States
   const [quickAddModal, setQuickAddModal] = useState(false);
+  const [isNewHousehold, setIsNewHousehold] = useState(false); // false = Existing, true = New
+
+  // 4. Existing Household Selection States
+  const [hhSearchText, setHhSearchText] = useState('');
+  const [hhResults, setHhResults] = useState<Household[]>([]);
+  const [selectedHousehold, setSelectedHousehold] = useState<Household | null>(null);
+  const [relationToHead, setRelationToHead] = useState('Son');
+
+  // 5. New Household Specific States
   const [quickHeadName, setQuickHeadName] = useState('');
   const [quickPhone, setQuickPhone] = useState('');
   const [quickOpeningBalance, setQuickOpeningBalance] = useState('');
 
-  // 1. Search Patients Live
+  // A. Search Patients Live
   useEffect(() => {
     if (patientSearchText.trim().length === 0) {
       setPatientResults([]);
@@ -53,7 +71,25 @@ export default function NewEntryScreen() {
     return () => clearTimeout(timer);
   }, [patientSearchText]);
 
-  // 2. Search Medicines Live
+  // B. Search Households Live
+  useEffect(() => {
+    if (hhSearchText.trim().length === 0) {
+      setHhResults([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const results = await getHouseholds(hhSearchText.trim());
+        setHhResults(results);
+      } catch (err) {
+        console.error('Household search error:', err);
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [hhSearchText]);
+
+  // C. Search Medicines Live
   useEffect(() => {
     if (medSearchText.trim().length === 0) {
       setMedResults([]);
@@ -78,35 +114,67 @@ export default function NewEntryScreen() {
       return;
     }
 
-    const head = quickHeadName.trim() ? quickHeadName.trim() : patientSearchText.trim();
-    const balance = parseFloat(quickOpeningBalance) || 0;
-
     try {
-      const result = await createHouseholdWithPatient({
-        head_name: head,
-        phone: quickPhone.trim() || undefined,
-        opening_balance: balance,
-      }, patientSearchText.trim(), // مریض کا نام دوسرا پیرامیٹر
-  quickHeadName.trim() ? 'Family Member' : 'Self (Head)' // رشتہ تیسرا پیرامیٹ
-      );
+      if (!isNewHousehold) {
+        // 1. موجودہ ہاؤس ہولڈ میں نیا مریض شامل کرنا
+        if (!selectedHousehold) {
+          Alert.alert('Select Household', 'Please search and select an existing household.');
+          return;
+        }
 
-      cart.setPatient({
-        id: result.patientId,
-        household_id: result.householdId,
-        patient_code: `P-${result.patientId}`,
-        name: patientSearchText.trim(),
-        household_head: head,
-        household_code: `H-${result.householdId}`,
-        household_balance: balance,
-      });
+        const newPatientId = await addPatientToExistingHousehold(
+          selectedHousehold.id,
+          patientSearchText.trim(),
+          relationToHead || 'Family Member',
+          quickPhone.trim() || undefined
+        );
 
+        cart.setSelectedPatient({
+          id: newPatientId,
+          household_id: selectedHousehold.id,
+          patient_code: `P-${newPatientId}`,
+          name: patientSearchText.trim(),
+          household_head: selectedHousehold.head_name,
+          household_code: selectedHousehold.household_code,
+          household_balance: selectedHousehold.balance,
+        } as PatientWithHousehold);
+
+      } else {
+        // 2. بالکل نیا ہاؤس ہولڈ بنانا
+        const head = quickHeadName.trim() ? quickHeadName.trim() : patientSearchText.trim();
+        const balance = parseFloat(quickOpeningBalance) || 0;
+
+        const result = await createHouseholdWithPatient(
+          {
+            head_name: head,
+            phone: quickPhone.trim() || undefined,
+            opening_balance: balance,
+          },
+          patientSearchText.trim(),
+          quickHeadName.trim() ? relationToHead : 'Self (Head)'
+        );
+
+        cart.setSelectedPatient({
+          id: result.patientId,
+          household_id: result.householdId,
+          patient_code: `P-${result.patientId}`,
+          name: patientSearchText.trim(),
+          household_head: head,
+          household_code: `H-${result.householdId}`,
+          household_balance: balance,
+        } as PatientWithHousehold);
+      }
+
+      // فارم ری سیٹ کریں
       setQuickAddModal(false);
       setPatientSearchText('');
       setPatientResults([]);
+      setSelectedHousehold(null);
+      setHhSearchText('');
       setQuickHeadName('');
       setQuickPhone('');
       setQuickOpeningBalance('');
-      Alert.alert('Success', 'New patient registered and selected!');
+      Alert.alert('Success', 'Patient registered to household successfully!');
     } catch (error) {
       console.error(error);
       Alert.alert('Error', 'Failed to register patient.');
@@ -119,7 +187,7 @@ export default function NewEntryScreen() {
       Alert.alert('Out of Stock', `${med.name} is currently out of stock.`);
       return;
     }
-    cart.addItem(med, 1);
+    cart.addItem(med);
     setMedSearchText('');
     setMedResults([]);
   };
@@ -136,19 +204,8 @@ export default function NewEntryScreen() {
     }
 
     const netTotal = cart.getNetTotal();
-    let finalPaid = 0;
-    let finalLoan = 0;
-
-    if (cart.paymentType === 'cash') {
-      finalPaid = netTotal;
-      finalLoan = 0;
-    } else if (cart.paymentType === 'loan') {
-      finalPaid = 0;
-      finalLoan = netTotal;
-    } else if (cart.paymentType === 'partial') {
-      finalPaid = Math.min(cart.paidAmount || 0, netTotal);
-      finalLoan = Math.max(0, netTotal - finalPaid);
-    }
+    const finalLoan = cart.getLoanAmount();
+    const finalPaid = Math.max(0, netTotal - finalLoan);
 
     try {
       await createSaleTransaction({
@@ -160,7 +217,7 @@ export default function NewEntryScreen() {
         paid_amount: finalPaid,
         loan_amount: finalLoan,
         notes: cart.notes || '',
-        items: cart.items.map((i) => ({
+        items: cart.items.map((i: CartItem) => ({
           medicine_id: i.medicine.id,
           quantity: i.quantity,
           unit_price: i.unit_price,
@@ -180,6 +237,11 @@ export default function NewEntryScreen() {
   };
 
   const netTotal = cart.getNetTotal();
+  const balanceVal = Number(
+    cart.selectedPatient?.household_balance ??
+    (cart.selectedPatient as any)?.balance ??
+    0
+  );
 
   return (
     <KeyboardAvoidingView
@@ -200,15 +262,15 @@ export default function NewEntryScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.patientName}>{cart.selectedPatient.name}</Text>
                 <Text style={styles.patientSub}>
-                  Head: {cart.selectedPatient.household_head} ({cart.selectedPatient.household_code})
+                  Head: {cart.selectedPatient.household_head || (cart.selectedPatient as any).head_name || 'Self'}
                 </Text>
                 <Text style={styles.balanceText}>
-Khata Due: Rs. {Number(cart.selectedPatient?.household_balance ?? (cart.selectedPatient as any)?.balance ?? 0).toLocaleString()}
+                  Khata Due: Rs. {balanceVal.toLocaleString()}
                 </Text>
               </View>
               <TouchableOpacity
                 style={styles.changeBtn}
-                onPress={() => cart.setPatient(null)}
+                onPress={() => cart.setSelectedPatient(null)}
               >
                 <Text style={styles.changeBtnText}>Change</Text>
               </TouchableOpacity>
@@ -224,21 +286,25 @@ Khata Due: Rs. {Number(cart.selectedPatient?.household_balance ?? (cart.selected
               />
               {patientSearchText.trim().length > 0 && (
                 <View style={styles.dropdownBox}>
-                  {patientResults.map((p) => (
-                    <TouchableOpacity
-                      key={p.id}
-                      style={styles.dropdownItem}
-                      onPress={() => {
-                        cart.setPatient(p);
-                        setPatientSearchText('');
-                        setPatientResults([]);
-                      }}
-                    >
-                      <Text style={styles.dropdownItemTitle}>{p.name}</Text>
-                      <Text style={styles.dropdownItemSub}>
-Head: {p.household_head || 'Self'} | Due: Rs. {Number(p.household_balance ?? (p as any).balance ?? 0).toLocaleString()}                      </Text>
-                    </TouchableOpacity>
-                  ))}
+                  {patientResults.map((p) => {
+                    const pDue = Number(p.household_balance ?? (p as any).balance ?? 0);
+                    return (
+                      <TouchableOpacity
+                        key={p.id}
+                        style={styles.dropdownItem}
+                        onPress={() => {
+                          cart.setSelectedPatient(p);
+                          setPatientSearchText('');
+                          setPatientResults([]);
+                        }}
+                      >
+                        <Text style={styles.dropdownItemTitle}>{p.name}</Text>
+                        <Text style={styles.dropdownItemSub}>
+                          Head: {p.household_head || (p as any).head_name || 'Self'} | Due: Rs. {pDue.toLocaleString()}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
 
                   {/* Register New Patient Button */}
                   <TouchableOpacity
@@ -247,6 +313,8 @@ Head: {p.household_head || 'Self'} | Due: Rs. {Number(p.household_balance ?? (p 
                       setQuickHeadName('');
                       setQuickPhone('');
                       setQuickOpeningBalance('');
+                      setSelectedHousehold(null);
+                      setHhSearchText('');
                       setQuickAddModal(true);
                     }}
                   >
@@ -275,28 +343,31 @@ Head: {p.household_head || 'Self'} | Due: Rs. {Number(p.household_balance ?? (p 
               {medResults.length === 0 ? (
                 <Text style={styles.noResultText}>No matching medicine found.</Text>
               ) : (
-                medResults.map((m) => (
-                  <TouchableOpacity
-                    key={m.id}
-                    style={styles.dropdownItem}
-                    onPress={() => handleSelectMedicine(m)}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.dropdownItemTitle}>{m.name}</Text>
-                      <Text style={styles.dropdownItemSub}>
-                        {m.generic_name || 'General'} | Rs. {m.sale_price}
-                      </Text>
-                    </View>
-                    <Text
-                      style={[
-                        styles.medStockBadge,
-                        m.stock <= m.low_stock_limit ? styles.lowStock : styles.normalStock,
-                      ]}
+                medResults.map((m) => {
+                  const displayPrice = (m as any).selling_price ?? (m as any).sale_price ?? (m as any).price ?? 0;
+                  return (
+                    <TouchableOpacity
+                      key={m.id}
+                      style={styles.dropdownItem}
+                      onPress={() => handleSelectMedicine(m)}
                     >
-                      Stock: {m.stock}
-                    </Text>
-                  </TouchableOpacity>
-                ))
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.dropdownItemTitle}>{m.name}</Text>
+                        <Text style={styles.dropdownItemSub}>
+                          {m.generic_name || 'General'} | Rs. {displayPrice}
+                        </Text>
+                      </View>
+                      <Text
+                        style={[
+                          styles.medStockBadge,
+                          m.stock <= (m.low_stock_limit || 5) ? styles.lowStock : styles.normalStock,
+                        ]}
+                      >
+                        Stock: {m.stock}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })
               )}
             </View>
           )}
@@ -308,7 +379,7 @@ Head: {p.household_head || 'Self'} | Due: Rs. {Number(p.household_balance ?? (p 
           {cart.items.length === 0 ? (
             <Text style={styles.emptyCartText}>No medicines added to prescription yet.</Text>
           ) : (
-            cart.items.map((item) => (
+            cart.items.map((item: CartItem) => (
               <View key={item.medicine.id} style={styles.cartRow}>
                 <View style={{ flex: 1.5 }}>
                   <Text style={styles.cartMedName}>{item.medicine.name}</Text>
@@ -359,7 +430,7 @@ Head: {p.household_head || 'Self'} | Due: Rs. {Number(p.household_balance ?? (p 
             {/* Total / Discount */}
             <View style={styles.billRow}>
               <Text style={styles.billLabel}>Subtotal:</Text>
-              <Text style={styles.billValue}>Rs. {cart.getGrossTotal()}</Text>
+              <Text style={styles.billValue}>Rs. {cart.getSubTotal()}</Text>
             </View>
 
             <View style={styles.billRow}>
@@ -444,7 +515,7 @@ Head: {p.household_head || 'Self'} | Due: Rs. {Number(p.household_balance ?? (p 
                   onChangeText={(t) => cart.setPaidAmount(parseFloat(t) || 0)}
                 />
                 <Text style={styles.partialBalanceNote}>
-                  Remaining to Khata Loan: Rs. {Math.max(0, netTotal - (cart.paidAmount || 0))}
+                  Remaining to Khata Loan: Rs. {cart.getLoanAmount()}
                 </Text>
               </View>
             )}
@@ -474,8 +545,42 @@ Head: {p.household_head || 'Self'} | Due: Rs. {Number(p.household_balance ?? (p 
       <Modal visible={quickAddModal} transparent={true} animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Quick Patient Registration</Text>
+            <Text style={styles.modalTitle}>Register New Patient</Text>
 
+            {/* Mode Selector Tabs */}
+            <View style={{ flexDirection: 'row', backgroundColor: '#e2e8f0', borderRadius: 8, padding: 3, marginBottom: 14 }}>
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  paddingVertical: 8,
+                  alignItems: 'center',
+                  backgroundColor: !isNewHousehold ? '#ffffff' : 'transparent',
+                  borderRadius: 6,
+                }}
+                onPress={() => setIsNewHousehold(false)}
+              >
+                <Text style={{ fontWeight: 'bold', fontSize: 12, color: !isNewHousehold ? '#0284c7' : '#64748b' }}>
+                  Existing Household (پرانا گھرانہ)
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  paddingVertical: 8,
+                  alignItems: 'center',
+                  backgroundColor: isNewHousehold ? '#ffffff' : 'transparent',
+                  borderRadius: 6,
+                }}
+                onPress={() => setIsNewHousehold(true)}
+              >
+                <Text style={{ fontWeight: 'bold', fontSize: 12, color: isNewHousehold ? '#0284c7' : '#64748b' }}>
+                  New Household (نیا گھرانہ)
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Patient Name (Read-only from search input) */}
             <Text style={styles.modalFieldLabel}>Patient Name</Text>
             <TextInput
               style={[styles.input, { backgroundColor: '#f1f5f9' }]}
@@ -483,36 +588,91 @@ Head: {p.household_head || 'Self'} | Due: Rs. {Number(p.household_balance ?? (p 
               editable={false}
             />
 
-            <Text style={styles.modalFieldLabel}>
-              Household Head Name (سربراہ کا نام - اگر خود ہے تو خالی چھوڑیں)
-            </Text>
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. Wali Muhammad (Self / Father)"
-              value={quickHeadName}
-              onChangeText={setQuickHeadName}
-            />
+            {/* Option A: Link to Existing Household */}
+            {!isNewHousehold ? (
+              <View style={{ marginTop: 8 }}>
+                <Text style={styles.modalFieldLabel}>Select Household / Head (سرپرست منتخب کریں)</Text>
+                {selectedHousehold ? (
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#eff6ff', padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#bfdbfe' }}>
+                    <View>
+                      <Text style={{ fontWeight: 'bold', color: '#1e40af' }}>{selectedHousehold.head_name} ({selectedHousehold.household_code})</Text>
+                      <Text style={{ fontSize: 11, color: '#64748b' }}>Balance: Rs. {selectedHousehold.balance}</Text>
+                    </View>
+                    <TouchableOpacity onPress={() => setSelectedHousehold(null)}>
+                      <Text style={{ color: '#dc2626', fontWeight: 'bold', fontSize: 12 }}>Change</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <View>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Search head name or code (e.g. Wali, H-0001)..."
+                      value={hhSearchText}
+                      onChangeText={setHhSearchText}
+                    />
+                    {hhResults.length > 0 && (
+                      <View style={{ borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 6, maxHeight: 120, backgroundColor: '#ffffff', marginTop: 4 }}>
+                        <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                          {hhResults.map((h) => (
+                            <TouchableOpacity
+                              key={h.id}
+                              style={{ padding: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' }}
+                              onPress={() => {
+                                setSelectedHousehold(h);
+                                setHhSearchText('');
+                                setHhResults([]);
+                              }}
+                            >
+                              <Text style={{ fontWeight: 'bold', fontSize: 13 }}>{h.head_name} ({h.household_code})</Text>
+                              <Text style={{ fontSize: 11, color: '#64748b' }}>Balance: Rs. {h.balance}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </ScrollView>
+                      </View>
+                    )}
+                  </View>
+                )}
 
-            <Text style={styles.modalFieldLabel}>Phone Number (اختیاری)</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="0300-1234567"
-              keyboardType="phone-pad"
-              value={quickPhone}
-              onChangeText={setQuickPhone}
-            />
+                <Text style={styles.modalFieldLabel}>Relation to Head (رشتہ)</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="e.g. Son, Daughter, Wife"
+                  value={relationToHead}
+                  onChangeText={setRelationToHead}
+                />
+              </View>
+            ) : (
+              /* Option B: Create Completely New Household */
+              <View style={{ marginTop: 8 }}>
+                <Text style={styles.modalFieldLabel}>Household Head Name (سربراہ کا نام)</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="e.g. Wali Muhammad (اگر مریض خود سربراہ ہے تو خالی چھوڑیں)"
+                  value={quickHeadName}
+                  onChangeText={setQuickHeadName}
+                />
 
-            <Text style={styles.modalFieldLabel}>
-              Previous Loan (اگر کوئی پرانا ادھار پہلے سے ہے)
-            </Text>
-            <TextInput
-              style={styles.input}
-              placeholder="0"
-              keyboardType="numeric"
-              value={quickOpeningBalance}
-              onChangeText={setQuickOpeningBalance}
-            />
+                <Text style={styles.modalFieldLabel}>Phone Number</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="0300-1234567"
+                  keyboardType="phone-pad"
+                  value={quickPhone}
+                  onChangeText={setQuickPhone}
+                />
 
+                <Text style={styles.modalFieldLabel}>Previous Loan (پرانا ادھار اگر ہے)</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="0"
+                  keyboardType="numeric"
+                  value={quickOpeningBalance}
+                  onChangeText={setQuickOpeningBalance}
+                />
+              </View>
+            )}
+
+            {/* Action Buttons */}
             <View style={styles.modalBtnRow}>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: '#e2e8f0' }]}

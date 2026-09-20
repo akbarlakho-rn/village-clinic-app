@@ -19,33 +19,34 @@ import { initDatabase } from './src/database';
 // Screens
 import HomeScreen from './src/screens/home/HomeScreen';
 import NewEntryScreen from './src/screens/newEntry/NewEntryScreen';
+import SettingsScreen from './src/screens/settings/SettingsScreen';
 import FinanceScreen from './src/screens/finance/FinanceScreen';
 import PatientsScreen from './src/screens/households/PatientsScreen';
 import MedicinesScreen from './src/screens/medicines/MedicinesScreen';
-import SettingsScreen from './src/screens/settings/SettingsScreen';
 import LockScreen from './src/screens/auth/LockScreen';
 
 const Tab = createBottomTabNavigator();
 
-// Custom Centered Floating Button
+// Custom Center Button
 function CustomCenterButton({ children, onPress }: any) {
   return (
     <TouchableOpacity
-      style={styles.floatingButtonContainer}
+      style={styles.floatingCenterWrap}
       onPress={onPress}
       activeOpacity={0.85}
     >
-      <View style={styles.floatingButtonCircle}>
+      <View style={styles.floatingCenterCircle}>
         {children}
       </View>
+      <Text style={styles.floatingCenterLabel}>New Entry</Text>
     </TouchableOpacity>
   );
 }
 
-function MainNavigator() {
+function MainTabs() {
   const insets = useSafeAreaInsets();
-  // اینڈرائڈ کی نیچے والی لکیر سے بچنے کے لیے کم از کم 22 پکسل فاصلہ لازمی رکھیں
-  const bottomPadding = Math.max(insets.bottom, Platform.OS === 'android' ? 22 : 16);
+  // اینڈرائڈ کی ہوم بار کے لیے محفوظ کشن
+  const safeBottom = Math.max(insets.bottom, Platform.OS === 'android' ? 14 : 10);
 
   return (
     <NavigationContainer>
@@ -57,22 +58,18 @@ function MainNavigator() {
           tabBarActiveTintColor: '#0284c7',
           tabBarInactiveTintColor: '#64748b',
           tabBarStyle: {
-            height: 60 + bottomPadding,
-            paddingBottom: bottomPadding,
-            paddingTop: 8,
+            height: 64 + safeBottom,
+            paddingBottom: safeBottom,
+            paddingTop: 6,
             backgroundColor: '#ffffff',
             borderTopWidth: 1,
             borderTopColor: '#e2e8f0',
             elevation: 12,
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: -3 },
-            shadowOpacity: 0.08,
-            shadowRadius: 6,
           },
           tabBarLabelStyle: {
             fontSize: 12,
             fontWeight: '700',
-            marginTop: 4,
+            marginBottom: 4,
           },
         }}
       >
@@ -92,9 +89,9 @@ function MainNavigator() {
           }}
         />
 
-        {/* 2. Floating Center Button (New Sale) */}
+        {/* 2. New Entry (Center Floating Button) */}
         <Tab.Screen
-          name="New Sale"
+          name="New Entry"
           component={NewEntryScreen}
           options={{
             tabBarButton: (props) => (
@@ -105,15 +102,15 @@ function MainNavigator() {
           }}
         />
 
-        {/* 3. Finance Tab */}
+        {/* 3. Settings / Menu Tab */}
         <Tab.Screen
-          name="Finance"
-          component={FinanceScreen}
+          name="SettingsTab"
+          component={SettingsScreen}
           options={{
-            title: 'Finance',
+            title: 'Settings',
             tabBarIcon: ({ focused, color }) => (
               <Ionicons
-                name={focused ? 'wallet' : 'wallet-outline'}
+                name={focused ? 'settings' : 'settings-outline'}
                 size={24}
                 color={color}
               />
@@ -121,22 +118,28 @@ function MainNavigator() {
           }}
         />
 
-        {/* Hidden Screens */}
+        {/* Hidden internal routes */}
+        <Tab.Screen
+          name="Finance"
+          component={FinanceScreen}
+  options={{
+    tabBarButton: () => null,
+    tabBarItemStyle: { display: 'none' },
+  }}        />
         <Tab.Screen
           name="Patients"
           component={PatientsScreen}
-          options={{ tabBarButton: () => null }}
-        />
+options={{
+    tabBarButton: () => null,
+    tabBarItemStyle: { display: 'none' },
+  }}        />
         <Tab.Screen
           name="Medicines"
           component={MedicinesScreen}
-          options={{ tabBarButton: () => null }}
-        />
-        <Tab.Screen
-          name="Settings"
-          component={SettingsScreen}
-          options={{ tabBarButton: () => null }}
-        />
+  options={{
+    tabBarButton: () => null,
+    tabBarItemStyle: { display: 'none' },
+  }}        />
       </Tab.Navigator>
     </NavigationContainer>
   );
@@ -180,7 +183,7 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <MainNavigator />
+      <MainTabs />
     </SafeAreaProvider>
   );
 }
@@ -197,25 +200,30 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#64748b',
   },
-  floatingButtonContainer: {
-    top: -18,
+  floatingCenterWrap: {
+    top: -14,
     justifyContent: 'center',
     alignItems: 'center',
-    flex: 1,
   },
-  floatingButtonCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+  floatingCenterCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     backgroundColor: '#16a34a',
     justifyContent: 'center',
     alignItems: 'center',
-    elevation: 8,
+    elevation: 6,
     shadowColor: '#16a34a',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.35,
     shadowRadius: 5,
     borderWidth: 3,
     borderColor: '#ffffff',
+  },
+  floatingCenterLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#16a34a',
+    marginTop: 2,
   },
 });

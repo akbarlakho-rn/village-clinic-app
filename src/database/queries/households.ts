@@ -148,3 +148,44 @@ export async function getPatientHistory(patientId: number): Promise<PatientHisto
     [patientId]
   );
 }
+// موجودہ ہاؤس ہولڈ میں نیا مریض شامل کرنا
+export async function addPatientToExistingHousehold(
+  householdId: number,
+  patientName: string,
+  relationToHead: string = 'Family Member',
+  phone?: string
+): Promise<number> {
+  const db = await getDatabase();
+  const pCode = await generateNextCode('patients', 'P');
+
+  const result = await db.runAsync(
+    `INSERT INTO patients (patient_code, household_id, name, relation_to_head, phone)
+     VALUES (?, ?, ?, ?, ?);`,
+    [pCode, householdId, patientName.trim(), relationToHead.trim(), phone?.trim() || null]
+  );
+
+  return result.lastInsertRowId;
+}
+// Fetch complete prescription & loan history for an entire Household (All family members)
+export async function getHouseholdHistory(householdId: number): Promise<PatientHistoryRecord[]> {
+  const db = await getDatabase();
+  return await db.getAllAsync<PatientHistoryRecord>(
+    `SELECT 
+      t.id as transaction_id,
+      t.created_at as date,
+      t.payment_type,
+      t.total_amount,
+      p.name as patient_name,
+      m.name as medicine_name,
+      ti.quantity,
+      ti.unit_price,
+      ti.total_price
+    FROM transactions t
+    JOIN patients p ON t.patient_id = p.id
+    JOIN transaction_items ti ON t.id = ti.transaction_id
+    JOIN medicines m ON ti.medicine_id = m.id
+    WHERE t.household_id = ?
+    ORDER BY t.created_at DESC;`,
+    [householdId]
+  );
+}

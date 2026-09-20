@@ -196,3 +196,65 @@ export async function getMonthlyFinanceSummary(yearMonth?: string) {
     netMonthCash: (salesRow?.total_cash || 0) + (recoveryRow?.total_recovery || 0) - (expenseRow?.total_expense || 0),
   };
 }
+
+// src/database/queries/finance.ts
+
+export interface CustomProfitSummary {
+  days: number;
+  totalSales: number;
+  totalCost: number;
+  grossProfit: number;
+  totalExpenses: number;
+  netProfit: number;
+  totalCashCollected: number;
+}
+
+export async function getCustomPeriodProfit(days: number = 7): Promise<CustomProfitSummary> {
+  const db = await getDatabase();
+
+  // تاریخ کا فلٹر: آج سے پچھلے N دن
+  const dateFilter = `date('now', 'localtime', '-${days} days')`;
+
+  // 1. کل سیل اور ادویات کی لاگت
+  const salesRow = await db.getFirstAsync<{ total_sales: number; total_cost: number }>(
+    `SELECT 
+       COALESCE(SUM(ti.total_price), 0) as total_sales,
+       COALESCE(SUM(ti.quantity * COALESCE(m.purchase_price, 0)), 0) as total_cost
+     FROM transactions t
+     JOIN transaction_items ti ON t.id = ti.transaction_id
+     JOIN medicines m ON ti.medicine_id = m.id
+     WHERE date(t.created_at) >= ${dateFilter};`
+  );
+
+  // 2. کل اخراجات
+  const expRow = await db.getFirstAsync<{ total_expenses: number }>(
+    `SELECT COALESCE(SUM(amount), 0) as total_expenses
+     FROM expenses
+     WHERE date(created_at) >= ${dateFilter};`
+  );
+
+  // 3. اس دوران کیش وصولی (سیل کیش + ادھار ریکوری)
+  const cashSales = await db.getFirstAsync<{ cash: number }>(
+    `SELECT COALESCE(SUM(paid_amount), 0) as cash FROM transactions WHERE date(created_at) >= ${dateFilter};`
+  );
+  const recoveries = await db.getFirstAsync<{ rec: number }>(
+    `SELECT COALESCE(SUM(amount), 0) as rec FROM loan_payments WHERE date(created_at) >= ${dateFilter};`
+  );
+
+  const totalSales = salesRow?.total_sales || 0;
+  const totalCost = salesRow?.total_cost || 0;
+  const grossProfit = totalSales - totalCost;
+  const totalExpenses = expRow?.total_expenses || 0;
+  const netProfit = grossProfit - totalExpenses;
+  const totalCashCollected = (cashSales?.cash || 0) + (recoveries?.rec || 0);
+
+  return {
+    days,
+    totalSales,
+    totalCost,
+    grossProfit,
+    totalExpenses,
+    netProfit,
+    totalCashCollected,
+  };
+}
