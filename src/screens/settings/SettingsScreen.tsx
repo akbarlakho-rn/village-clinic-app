@@ -241,6 +241,11 @@ export default function SettingsScreen({ navigation }: any) {
         </View>
 
         <View style={{ height: 40 }} />
+
+        <Text style={{ textAlign: 'center', marginTop: 20, fontSize: 14, color: '#94a3b8' }}>
+          This App is Developed By Ghullam Akbar Lakho for Dr. Waseem Abbas Langahs Clinic
+        </Text>
+        
       </ScrollView>
     </SafeAreaView>
   );
