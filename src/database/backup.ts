@@ -25,6 +25,7 @@ export async function exportDatabaseBackup(): Promise<void> {
       loanPayments,
       stockTransactions,
       expenses,
+      medicine_purchases,
     ] = await Promise.all([
       db.getAllAsync('SELECT * FROM medicines;'),
       db.getAllAsync('SELECT * FROM households;'),
@@ -34,6 +35,7 @@ export async function exportDatabaseBackup(): Promise<void> {
       db.getAllAsync('SELECT * FROM loan_payments;'),
       db.getAllAsync('SELECT * FROM stock_transactions;'),
       db.getAllAsync('SELECT * FROM expenses;'),
+      db.getAllAsync('SELECT * FROM medicine_purchases;'),
     ]);
 
     // 2. پورا کلینک ڈیٹا ایک منظم بیک اپ آبجیکٹ میں یکجا کریں
@@ -50,6 +52,7 @@ export async function exportDatabaseBackup(): Promise<void> {
         loan_payments: loanPayments,
         stock_transactions: stockTransactions,
         expenses,
+        medicine_purchases,
       },
     };
 
@@ -113,6 +116,7 @@ export async function importDatabaseBackup(onSuccess?: () => void): Promise<void
       loan_payments = [],
       stock_transactions = [],
       expenses = [],
+      medicine_purchases = [],
     } = parsedBackup.data;
 
     // 3. ڈیٹا بیس میں سارا پرانا ڈیٹا ہٹا کر نیا ڈیٹا بحال کریں (Single Transaction)
@@ -128,6 +132,7 @@ export async function importDatabaseBackup(onSuccess?: () => void): Promise<void
       await db.runAsync('DELETE FROM patients;');
       await db.runAsync('DELETE FROM households;');
       await db.runAsync('DELETE FROM medicines;');
+      await db.runAsync('DELETE FROM medicine_purchases;');
 
       // 1. Medicines
       for (const m of medicines) {
@@ -198,6 +203,13 @@ export async function importDatabaseBackup(onSuccess?: () => void): Promise<void
           `INSERT INTO expenses (id, title, amount, category, created_at)
            VALUES (?, ?, ?, ?, ?);`,
           [e.id, e.title, e.amount, e.category, e.created_at]
+        );
+      }
+      for (const mp of medicine_purchases) {
+        await db.runAsync(
+          `INSERT INTO medicine_purchases (id, medicine_id, quantity, purchase_price, supplier, created_at)
+           VALUES (?, ?, ?, ?, ?, ?);`,
+          [mp.id, mp.medicine_id, mp.quantity, mp.purchase_price, mp.supplier, mp.created_at]
         );
       }
     });
